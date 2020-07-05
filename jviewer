@@ -1,0 +1,57 @@
+#!/bin/bash
+# Helper wrapper for jviewer-starter.py
+# Try to get BMC into some useable state
+
+# help with hostnames
+if [[ ${1} =~ [[:alpha:]] ]]; then
+  if [[ ${1} =~ ipmi$ ]]; then  #ends with ipmi
+    H=${1}
+  elif [[ ${1} =~ .*ipmi.* ]]; then  #ipmi in middle
+    H=${1}
+  elif [[ ${1} =~ .\org$ ]]; then  # fqdn without ipmi
+    H=${1/\./-ipmi\.}
+  else
+    H="${1}-ipmi"  # short name without -ipmi
+  fi
+else
+  H=${1}
+fi
+ping -c 1 ${H}
+if [[ $? -ne 0 ]];then
+  echo "Can not even ping the ipmi IP, there's no reason to continue at this point"
+  echo "Try power cycle host or double check name/dns and then come back here"
+  exit 1
+fi
+
+echo "ipmi-power --on ${H}"
+ipmi-power --on -u admin -p admin -h ${H}
+ipmi-chassis --get-chassis-status  -u admin -p admin -h ${H}
+if [[ $? -ne 0 ]];then
+  echo "Looks like ipmi command did not work"
+  echo "BMC is up, but not functional"
+  echo "Will exit now as not likely to succeed at this time"
+  echo "Try power cycle of host double check name/dns and then come back here"
+  exit 1
+fi
+
+# Lets test to see if port is open. If it's not, issue bmc-reset
+pd=$(dirname "$(realpath  "$0")")
+BMCINFO=$(bmc-info -u admin -p admin -h ${H} | grep 'Manufacturer ID')
+if [[ ${BMCINFO} =~ ASUSTek ]]; then
+  HC=$(curl -s -o /dev/null -w  "%{http_code}" ${H})
+  if [[ $HC -ge 400 ]]; then
+    echo "ERROR, looks like port 80 not responding, will reset BMC now"
+    ${pd}/bmc-reset.sh ${H}
+  fi
+else
+  nc -w 10 -z ${H} 7578
+  if [[ $? -ne 0 ]]; then
+    echo "ERROR, looks like port 7578 is not responding, will reset BMC now"
+    ${pd}/bmc-reset.sh ${H}
+    echo "Waiting 60 seconds extra"
+    sleep 60 #Wait to make sure web server is really functional
+  fi
+fi
+echo "Running ${pd}/jviewer-starter.py ${H}"
+${pd}/jviewer-starter.py ${H}
+
